@@ -24,3 +24,30 @@ class ListingsResponse(BaseModel):
     count: int
     source: str
     results: list[Listing]
+    # Pola dodatkowe (wstecznie kompatybilne — istniejący klienci ignorują nadmiarowe klucze).
+    offset: int = Field(0, description="Przesunięcie zastosowane do wyników")
+    limit: int = Field(20, description="Zastosowany limit liczby wyników")
+    sort: Optional[str] = Field(
+        None, description="Zastosowane sortowanie (np. price_asc / price_desc)"
+    )
+    total_available: int = Field(
+        0,
+        description="Liczba rekordów pobranych ze źródła w oknie (przed offset/limit)",
+    )
+
+
+class SourceInfo(BaseModel):
+    """Opis jednego dostępnego źródła danych."""
+
+    id: str = Field(..., description="Identyfikator źródła używany wewnętrznie")
+    name: str = Field(..., description="Czytelna nazwa źródła")
+    url: str = Field(..., description="Strona źródła")
+    attribution_required: bool = Field(
+        ..., description="Czy źródło wymaga atrybucji przy publikacji danych"
+    )
+    description: str = Field(..., description="Krótki opis zawartości źródła")
+
+
+class SourcesResponse(BaseModel):
+    count: int
+    sources: list[SourceInfo]

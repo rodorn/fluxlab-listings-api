@@ -48,6 +48,7 @@ class GameDealsClient:
         max_retries: int = 3,
         min_interval_s: float = 0.34,  # ~3 req/s max, ostrożny throttle
         stores_ttl_s: int = 3600,
+        deals_ttl_s: int = 60,
     ):
         self.base_url = base_url.rstrip("/")
         self.user_agent = user_agent or os.getenv("SCRAPER_USER_AGENT") or DEFAULT_UA
@@ -60,6 +61,9 @@ class GameDealsClient:
         self.max_retries = max_retries
         self.min_interval_s = min_interval_s
         self.stores_ttl_s = stores_ttl_s
+        self.deals_ttl_s = deals_ttl_s
+        # CheapShark akceptuje pageSize maksymalnie 60 rekordów na stronę.
+        self.source_page_size = 60
 
         # Proxy opcjonalnie: HTTP_PROXY / HTTPS_PROXY / SCRAPER_PROXY_URL.
         proxy = os.getenv("SCRAPER_PROXY_URL") or None
@@ -77,6 +81,13 @@ class GameDealsClient:
         self._last_request_ts = 0.0
         self._stores_cache: dict[str, str] = {}
         self._stores_cache_ts = 0.0
+        # Cache surowych stron ze źródła: klucz -> (timestamp, dane).
+        self._deals_cache: dict[tuple, tuple[float, list]] = {}
+
+    def clear_cache(self) -> None:
+        """Czyści cache stron ofert (pomocne w testach / przy ręcznym odświeżeniu)."""
+        with self._lock:
+            self._deals_cache.clear()
 
     # ---- infrastruktura ----------------------------------------------------
 
@@ -116,7 +127,7 @@ class GameDealsClient:
 
         if isinstance(last_exc, ListingsError):
             raise last_exc
-        raise ListingsError(f"źródło niedostępne: {last_exc}", 504)
+        raise ListingsError(f"źródło niedostępne (timeout/sieć): {last_exc}", 502)
 
     @staticmethod
     def _sleep_backoff(attempt: int) -> None:
@@ -185,14 +196,23 @@ class GameDealsClient:
 
     # ---- API publiczne ------------------------------------------------------
 
-    def search_listings(self, query: str, limit: int = 20) -> list[Listing]:
-        """Zwraca znormalizowane oferty pasujące do zapytania.
+    def _deals_page(self, query: str, page_number: int) -> list:
+        """Pobiera pojedynczą stronę ofert ze źródła (z cache TTL).
 
-        query pusty -> najświeższe/najlepsze deals bez filtra tytułu.
+        Zwraca surową listę słowników z CheapShark dla danej strony.
         """
-        limit = max(1, min(limit, 60))
-        params: dict = {"pageSize": limit, "sortBy": "Deal Rating"}
         q = (query or "").strip()
+        key = (q, page_number)
+        now = time.monotonic()
+        cached = self._deals_cache.get(key)
+        if cached and (now - cached[0]) <= self.deals_ttl_s:
+            return cached[1]
+
+        params: dict = {
+            "pageSize": self.source_page_size,
+            "pageNumber": page_number,
+            "sortBy": "Deal Rating",
+        }
         if q:
             params["title"] = q
 
@@ -205,7 +225,31 @@ class GameDealsClient:
         if not isinstance(data, list):
             raise ListingsError("nieoczekiwany format odpowiedzi źródła", 502)
 
-        return [self._normalize(item) for item in data[:limit]]
+        self._deals_cache[key] = (now, data)
+        return data
+
+    def search_listings(self, query: str, want: int = 20) -> list[Listing]:
+        """Zwraca znormalizowane oferty pasujące do zapytania.
+
+        query pusty -> najświeższe/najlepsze deals bez filtra tytułu.
+        `want` to liczba rekordów potrzebnych warstwie API (offset+limit);
+        źródło stronicowane jest po 60 rekordów, wyniki cache'owane per strona.
+        """
+        want = max(1, want)
+        collected: list = []
+        page_number = 0
+        # Zabezpieczenie przed nieskończoną pętlą (CheapShark ma skończoną liczbę stron).
+        max_pages = 50
+        while len(collected) < want and page_number < max_pages:
+            page = self._deals_page(query, page_number)
+            if not page:
+                break
+            collected.extend(page)
+            if len(page) < self.source_page_size:
+                break  # ostatnia strona
+            page_number += 1
+
+        return [self._normalize(item) for item in collected[:want]]
 
     def close(self) -> None:
         self._client.close()
