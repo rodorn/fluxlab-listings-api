@@ -1,5 +1,7 @@
 # Listings API, Game Deals (scraper-as-API)
 
+> Pobieranie danych z serwisów na zamówienie: [fluxlab.pl/scraping-danych](https://fluxlab.pl/scraping-danych?utm_source=github&utm_campaign=fluxlab-listings-api)
+
 Płatne mikro-API zwracające **znormalizowane oferty** z publicznego, bezkluczowego
 źródła [CheapShark](https://www.cheapshark.com) (promocje na gry). Gotowe do publikacji na RapidAPI.
 
